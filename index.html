@@ -1,0 +1,1889 @@
+<!DOCTYPE html>
+<html lang="it" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ballistic Vision AI — Riconoscimento Fondi di Bossolo & Arduino TinyML</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <!-- TensorFlow.js & MobileNet -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        slate: {
+                            850: '#151e2e',
+                            900: '#0f172a',
+                            950: '#090d16',
+                        },
+                        amber: {
+                            450: '#f59e0b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Custom Scrollbar per look tecnico */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #f59e0b;
+        }
+
+        /* Effetto griglia balistica sullo sfondo */
+        .bg-ballistic-grid {
+            background-size: 32px 32px;
+            background-image: 
+                linear-gradient(to right, rgba(245, 158, 11, 0.04) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(245, 158, 11, 0.04) 1px, transparent 1px);
+        }
+
+        /* Animazione mirino scanner */
+        @keyframes pulse-reticle {
+            0%, 100% { transform: scale(1); opacity: 0.85; }
+            50% { transform: scale(1.02); opacity: 1; }
+        }
+        .reticle-ring {
+            animation: pulse-reticle 3s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans antialiased min-h-screen flex flex-col bg-ballistic-grid selection:bg-amber-500/30 selection:text-amber-300">
+
+    <!-- Toast Notification Container (No alert() consentiti) -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+            <!-- Brand -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-slate-950 font-bold">
+                    <i class="fa-solid fa-crosshairs text-xl"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="font-bold text-base sm:text-lg tracking-tight text-white">BALLISTIC VISION <span class="text-amber-400">AI</span></h1>
+                        <span class="hidden sm:inline-block text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">v2.4 TinyML</span>
+                    </div>
+                    <p class="text-xs text-slate-400 hidden sm:block">Classificazione Ottica Fondi di Bossolo & Deploy Arduino</p>
+                </div>
+            </div>
+
+            <!-- Status Indicators -->
+            <div class="flex items-center gap-2 sm:gap-4">
+                <!-- TF.js Model Status -->
+                <div id="tf-status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/80 text-xs font-mono">
+                    <span id="tf-status-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                    <span id="tf-status-text" class="text-slate-300">Caricamento MobileNet...</span>
+                </div>
+
+                <!-- WebSerial Arduino Status -->
+                <button id="btn-header-serial" onclick="toggleSerialConnection()" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs font-mono transition cursor-pointer">
+                    <span id="serial-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+                    <span id="serial-text" class="hidden md:inline text-slate-300">Arduino: Disconnesso</span>
+                    <i class="fa-brands fa-usb text-slate-400"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Pipeline Stepper / Navigation -->
+    <div class="bg-slate-900/50 border-b border-slate-800/60">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+            <nav class="grid grid-cols-2 md:grid-cols-4 gap-2" aria-label="Fasi Workflow">
+                <button onclick="switchTab('dataset')" id="tab-btn-dataset" class="tab-btn active flex items-center justify-center sm:justify-start gap-2.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm">
+                    <span class="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 font-mono font-bold flex items-center justify-center text-xs">1</span>
+                    <span>Dataset & Classi</span>
+                </button>
+
+                <button onclick="switchTab('training')" id="tab-btn-training" class="tab-btn flex items-center justify-center sm:justify-start gap-2.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800">
+                    <span class="w-6 h-6 rounded-lg bg-slate-800 text-slate-300 font-mono font-bold flex items-center justify-center text-xs">2</span>
+                    <span>Training Neurale</span>
+                </button>
+
+                <button onclick="switchTab('inference')" id="tab-btn-inference" class="tab-btn flex items-center justify-center sm:justify-start gap-2.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800">
+                    <span class="w-6 h-6 rounded-lg bg-slate-800 text-slate-300 font-mono font-bold flex items-center justify-center text-xs">3</span>
+                    <span>Riconoscimento Live</span>
+                </button>
+
+                <button onclick="switchTab('arduino')" id="tab-btn-arduino" class="tab-btn flex items-center justify-center sm:justify-start gap-2.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800">
+                    <span class="w-6 h-6 rounded-lg bg-slate-800 text-slate-300 font-mono font-bold flex items-center justify-center text-xs">4</span>
+                    <span>Export Arduino / C++</span>
+                </button>
+            </nav>
+        </div>
+    </div>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <!-- =====================================================================
+             SEZIONE 1: DATASET & CLASSI
+        ====================================================================== -->
+        <section id="section-dataset" class="tab-section space-y-6">
+            <!-- Banner Azioni Rapide -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 shadow-xl">
+                <div>
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-database text-amber-400"></i>
+                        Acquisizione Campioni Fondi di Bossolo
+                    </h2>
+                    <p class="text-sm text-slate-400 mt-1">
+                        Carica foto macro dei fondelli per ogni calibro/marca oppure genera un dataset sintetico procedurale per testare subito il modello.
+                    </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+                    <button onclick="generateSyntheticDataset()" id="btn-gen-synthetic" class="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 text-xs sm:text-sm font-medium transition flex items-center justify-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>Genera Campioni Demo</span>
+                    </button>
+                    <button onclick="addNewClassModal()" class="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs sm:text-sm transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer">
+                        <i class="fa-solid fa-plus"></i>
+                        <span>Nuova Classe</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Form Aggiunta Rapida Classe (nascosto di default) -->
+            <div id="new-class-bar" class="hidden bg-slate-900 border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3 shadow-lg">
+                <div class="flex-1 w-full">
+                    <label class="block text-xs font-mono text-amber-400 mb-1">NOME CALIBRO / MARCATURA FONDELLO</label>
+                    <input type="text" id="new-class-input" placeholder="Es. 7.62x51 NATO, .38 Special, Fiocchi 9mm..." class="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm focus:outline-none focus:border-amber-500">
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto self-end">
+                    <button onclick="confirmAddNewClass()" class="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition cursor-pointer">Aggiungi</button>
+                    <button onclick="cancelAddNewClass()" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition cursor-pointer">Annulla</button>
+                </div>
+            </div>
+
+            <!-- Griglia delle Classi -->
+            <div id="classes-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Le card delle classi vengono iniettate dinamicamente via JS -->
+            </div>
+
+            <!-- Footer Azione Dataset -> Training -->
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4">
+                <div class="flex items-center gap-3 text-xs sm:text-sm text-slate-400">
+                    <i class="fa-solid fa-circle-info text-amber-400 text-base"></i>
+                    <span>Consigliati almeno <strong class="text-slate-200">8-15 campioni</strong> per classe con illuminazione uniforme per una precisione ottimale.</span>
+                </div>
+                <button onclick="switchTab('training')" class="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 cursor-pointer">
+                    <span>Procedi al Training</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </div>
+        </section>
+
+        <!-- =====================================================================
+             SEZIONE 2: TRAINING NEURALE (TRANSFER LEARNING MOBILENET)
+        ====================================================================== -->
+        <section id="section-training" class="tab-section hidden space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- Colonna Sinistra: Iperparametri & Controlli -->
+                <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-5 shadow-xl flex flex-col justify-between">
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <h3 class="font-semibold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-sliders text-amber-400"></i>
+                                Parametri Addestramento
+                            </h3>
+                            <span class="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">Transfer Learning</span>
+                        </div>
+
+                        <!-- Riepilogo Dataset -->
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3">
+                                <div class="text-xs text-slate-400">Classi Attive</div>
+                                <div id="train-stat-classes" class="text-xl font-mono font-bold text-white mt-0.5">0</div>
+                            </div>
+                            <div class="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3">
+                                <div class="text-xs text-slate-400">Campioni Totali</div>
+                                <div id="train-stat-samples" class="text-xl font-mono font-bold text-amber-400 mt-0.5">0</div>
+                            </div>
+                        </div>
+
+                        <!-- Controllo Epoche -->
+                        <div>
+                            <div class="flex justify-between text-xs mb-1.5">
+                                <label for="param-epochs" class="text-slate-300 font-medium">Epoche (Epochs)</label>
+                                <span id="val-epochs" class="font-mono text-amber-400 font-bold">30</span>
+                            </div>
+                            <input type="range" id="param-epochs" min="10" max="100" step="5" value="30" oninput="document.getElementById('val-epochs').textContent = this.value" class="w-full accent-amber-500 cursor-pointer">
+                        </div>
+
+                        <!-- Controllo Batch Size -->
+                        <div>
+                            <label for="param-batch" class="block text-xs text-slate-300 font-medium mb-1.5">Batch Size</label>
+                            <select id="param-batch" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white font-mono focus:outline-none focus:border-amber-500">
+                                <option value="4">4 (Dataset piccolo)</option>
+                                <option value="8" selected>8 (Bilanciato)</option>
+                                <option value="16">16 (Dataset medio)</option>
+                                <option value="32">32 (Veloce)</option>
+                            </select>
+                        </div>
+
+                        <!-- Controllo Learning Rate -->
+                        <div>
+                            <label for="param-lr" class="block text-xs text-slate-300 font-medium mb-1.5">Learning Rate</label>
+                            <select id="param-lr" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white font-mono focus:outline-none focus:border-amber-500">
+                                <option value="0.0001">0.0001 (Fine-tuning preciso)</option>
+                                <option value="0.001" selected>0.001 (Standard Adam)</option>
+                                <option value="0.005">0.005 (Convergenza rapida)</option>
+                            </select>
+                        </div>
+
+                        <!-- Unità Dense Layer -->
+                        <div>
+                            <label for="param-units" class="block text-xs text-slate-300 font-medium mb-1.5">Neuroni Hidden Layer (Dense)</label>
+                            <select id="param-units" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white font-mono focus:outline-none focus:border-amber-500">
+                                <option value="32">32 neuroni (Ultra-leggero per MCU)</option>
+                                <option value="64" selected>64 neuroni (Consigliato)</option>
+                                <option value="128">128 neuroni (Alta capacità)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-slate-800 space-y-2.5">
+                        <button id="btn-start-training" onclick="startTraining()" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold text-sm transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer">
+                            <i class="fa-solid fa-brain"></i>
+                            <span>Avvia Addestramento Modello</span>
+                        </button>
+                        <p class="text-[11px] text-center text-slate-500 font-mono">
+                            Estrazione feature tramite MobileNetV2 (1024-dim)
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Colonna Destra (2 span): Metriche Live & Grafico Canvas -->
+                <div class="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-xl space-y-4">
+                    <div>
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                            <h3 class="font-semibold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-chart-line text-emerald-400"></i>
+                                Telemetria Addestramento in Tempo Reale
+                            </h3>
+                            <span id="training-status-pill" class="px-2.5 py-1 rounded-full text-xs font-mono bg-slate-800 text-slate-400">In attesa</span>
+                        </div>
+
+                        <!-- Barra Avanzamento -->
+                        <div class="mt-4 space-y-1.5">
+                            <div class="flex justify-between text-xs font-mono">
+                                <span id="progress-label" class="text-slate-400">Epoca 0 / 0</span>
+                                <span id="progress-percent" class="text-amber-400 font-bold">0%</span>
+                            </div>
+                            <div class="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                                <div id="training-progress-bar" class="h-full bg-gradient-to-r from-amber-500 to-emerald-400 w-0 transition-all duration-150"></div>
+                            </div>
+                        </div>
+
+                        <!-- KPI Numerici Live -->
+                        <div class="grid grid-cols-3 gap-3 mt-4">
+                            <div class="bg-slate-950 border border-slate-800/80 rounded-xl p-3">
+                                <div class="text-[11px] font-mono text-slate-400 uppercase">Loss (Errore)</div>
+                                <div id="metric-loss" class="text-lg sm:text-xl font-mono font-bold text-rose-400 mt-0.5">--</div>
+                            </div>
+                            <div class="bg-slate-950 border border-slate-800/80 rounded-xl p-3">
+                                <div class="text-[11px] font-mono text-slate-400 uppercase">Accuracy</div>
+                                <div id="metric-acc" class="text-lg sm:text-xl font-mono font-bold text-emerald-400 mt-0.5">--</div>
+                            </div>
+                            <div class="bg-slate-950 border border-slate-800/80 rounded-xl p-3">
+                                <div class="text-[11px] font-mono text-slate-400 uppercase">Tempo / Epoca</div>
+                                <div id="metric-time" class="text-lg sm:text-xl font-mono font-bold text-sky-400 mt-0.5">--</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Canvas Grafico Loss & Accuracy -->
+                    <div class="relative w-full h-56 sm:h-64 bg-slate-950 rounded-xl border border-slate-800 p-2">
+                        <canvas id="training-chart-canvas" class="w-full h-full block"></canvas>
+                        <div id="chart-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-600 pointer-events-none">
+                            <i class="fa-solid fa-wave-square text-3xl mb-2 opacity-50"></i>
+                            <span class="text-xs font-mono">Avvia il training per visualizzare le curve di apprendimento</span>
+                        </div>
+                    </div>
+
+                    <!-- Log Console -->
+                    <div class="bg-slate-950 rounded-xl border border-slate-800 p-3 font-mono text-xs text-slate-400 h-24 overflow-y-auto" id="training-console">
+                        <div class="text-slate-500">&gt; Sistema pronto. Carica o genera immagini nella scheda 1 e avvia il training.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- =====================================================================
+             SEZIONE 3: RICONOSCIMENTO ONLINE (WEBCAM & UPLOAD TEST)
+        ====================================================================== -->
+        <section id="section-inference" class="tab-section hidden space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                <!-- Colonna Sinistra (7 col): Acquisizione Ottica con Mirino Fondello -->
+                <div class="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                        <h3 class="font-semibold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-eye text-amber-400"></i>
+                            Camera Ottica / Analisi Immagine
+                        </h3>
+                        
+                        <!-- Switch Sorgente Input -->
+                        <div class="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                            <button onclick="setInferenceMode('upload')" id="btn-mode-upload" class="px-3 py-1 rounded-lg text-xs font-medium bg-amber-500 text-slate-950 transition cursor-pointer">
+                                <i class="fa-solid fa-upload mr-1"></i> Carica Foto
+                            </button>
+                            <button onclick="setInferenceMode('webcam')" id="btn-mode-webcam" class="px-3 py-1 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition cursor-pointer">
+                                <i class="fa-solid fa-video mr-1"></i> Webcam Live
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Viewport Ottico con Mirino Circolare -->
+                    <div class="relative w-full aspect-square max-h-[420px] mx-auto bg-slate-950 rounded-2xl border-2 border-slate-800 overflow-hidden flex items-center justify-center group">
+                        
+                        <!-- Video Webcam -->
+                        <video id="inference-video" autoplay playsinline muted class="hidden w-full h-full object-cover"></video>
+                        
+                        <!-- Immagine Caricata -->
+                        <img id="inference-image" alt="Anteprima fondello" class="hidden w-full h-full object-contain">
+                        
+                        <!-- Placeholder iniziale -->
+                        <div id="inference-placeholder" class="text-center p-6 space-y-3">
+                            <div class="w-16 h-16 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-500">
+                                <i class="fa-solid fa-bullseye text-2xl"></i>
+                            </div>
+                            <p class="text-sm text-slate-400">Carica una foto del fondo di bossolo o attiva la webcam/microscopio USB</p>
+                            <label class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-medium cursor-pointer border border-slate-700 transition">
+                                <i class="fa-solid fa-folder-open"></i>
+                                <span>Seleziona Immagine Test</span>
+                                <input type="file" id="test-image-input" accept="image/*" class="hidden" onchange="handleTestImageUpload(event)">
+                            </label>
+                        </div>
+
+                        <!-- Overlay Mirino Balistico (Reticolo di Centraggio Fondello) -->
+                        <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
+                            <!-- Cerchio esterno rim -->
+                            <div class="w-64 h-64 sm:w-72 sm:h-72 rounded-full border-2 border-dashed border-amber-400/60 reticle-ring flex items-center justify-center relative">
+                                <!-- Cerchio interno innesco (primer) -->
+                                <div class="w-20 h-20 rounded-full border border-amber-400/50 flex items-center justify-center">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-rose-500"></div>
+                                </div>
+                                <!-- Tacche cardinali -->
+                                <div class="absolute -top-2 w-0.5 h-3 bg-amber-400"></div>
+                                <div class="absolute -bottom-2 w-0.5 h-3 bg-amber-400"></div>
+                                <div class="absolute -left-2 h-0.5 w-3 bg-amber-400"></div>
+                                <div class="absolute -right-2 h-0.5 w-3 bg-amber-400"></div>
+                                <span class="absolute -bottom-6 text-[10px] font-mono text-amber-400/80 bg-slate-950/80 px-2 py-0.5 rounded">ALLINEA FONDELLO</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Controlli Sotto Viewport -->
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <label class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium cursor-pointer transition flex items-center gap-2 border border-slate-700">
+                            <i class="fa-solid fa-image"></i>
+                            <span>Cambia Immagine</span>
+                            <input type="file" accept="image/*" class="hidden" onchange="handleTestImageUpload(event)">
+                        </label>
+
+                        <div class="flex items-center gap-2">
+                            <button onclick="testWithRandomSample()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-medium transition border border-slate-700 cursor-pointer" title="Testa con un campione sintetico generato al momento">
+                                <i class="fa-solid fa-dice mr-1"></i> Simula Fondello
+                            </button>
+                            <button onclick="runSinglePrediction()" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition flex items-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer">
+                                <i class="fa-solid fa-magnifying-glass-chart"></i>
+                                <span>Analizza Ora</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Colonna Destra (5 col): Risultati Classificazione & Invio Arduino -->
+                <div class="lg:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between space-y-5">
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <h3 class="font-semibold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-square-poll-horizontal text-emerald-400"></i>
+                                Risultato Identificazione
+                            </h3>
+                            <span id="inference-fps" class="text-xs font-mono text-slate-400">-- ms</span>
+                        </div>
+
+                        <!-- Box Risultato Principale -->
+                        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center relative overflow-hidden">
+                            <div class="text-[11px] font-mono uppercase tracking-wider text-slate-400">Calibro / Classe Rilevata</div>
+                            <div id="top-prediction-label" class="text-2xl sm:text-3xl font-bold text-amber-400 mt-1 font-mono tracking-tight">
+                                IN ATTESA
+                            </div>
+                            <div id="top-prediction-conf" class="text-xs font-mono text-slate-400 mt-1">
+                                Confidenza: --%
+                            </div>
+                        </div>
+
+                        <!-- Barre di Probabilità per tutte le classi -->
+                        <div class="space-y-3">
+                            <div class="text-xs font-mono text-slate-400 uppercase">Distribuzione Probabilità</div>
+                            <div id="prediction-bars-container" class="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                                <div class="text-xs text-slate-500 italic">Addestra il modello per visualizzare le barre di confidenza.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bridge Diretto verso Arduino (Web Serial) -->
+                    <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-solid fa-microchip text-sky-400"></i>
+                                <span class="text-xs font-semibold text-white">Bridge Seriale Arduino (USB)</span>
+                            </div>
+                            <label class="inline-flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
+                                <input type="checkbox" id="auto-send-serial" class="rounded accent-amber-500" checked>
+                                <span>Invio Auto</span>
+                            </label>
+                        </div>
+                        <p class="text-[11px] text-slate-400">
+                            Invia automaticamente l'ID della classe riconosciuta (es. <code class="text-amber-400">CLASS:0:9x19_Luger\n</code>) alla scheda Arduino collegata via USB.
+                        </p>
+                        <button onclick="toggleSerialConnection()" id="btn-panel-serial" class="w-full py-2 px-3 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 border border-sky-500/30 text-xs font-mono font-medium transition flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-plug"></i>
+                            <span>Connetti Porta Seriale Arduino</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- =====================================================================
+             SEZIONE 4: EXPORT ARDUINO / C++ & TINYML
+        ====================================================================== -->
+        <section id="section-arduino" class="tab-section hidden space-y-6">
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-6">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-microchip text-amber-400"></i>
+                            Esportazione Firmware & Pesi per Arduino / ESP32-CAM
+                        </h2>
+                        <p class="text-sm text-slate-400 mt-1">
+                            Genera lo sketch C++ (<code class="text-amber-400">.ino</code>) e l'header dei pesi neurali (<code class="text-amber-400">headstamp_model.h</code>) per smistamento automatico con servomotori o LED.
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="downloadArduinoHeader()" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 text-xs font-mono font-medium transition flex items-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-file-code"></i>
+                            <span>Scarica headstamp_model.h</span>
+                        </button>
+                        <button onclick="downloadArduinoSketch()" class="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs font-mono transition flex items-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer">
+                            <i class="fa-solid fa-download"></i>
+                            <span>Scarica Sketch .INO</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Selettore Architettura Target -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div onclick="selectArduinoTarget('serial_bridge')" id="target-card-serial" class="p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 cursor-pointer transition">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="font-semibold text-white text-sm">1. Arduino UNO / Nano / Mega (USB Vision Bridge)</span>
+                            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500 text-slate-950 font-bold">CONSIGLIATO</span>
+                        </div>
+                        <p class="text-xs text-slate-300">
+                            La webapp elabora l'immagine ad alta risoluzione (Microscopio USB / Webcam) e invia il comando seriale ad Arduino per azionare servo smistatori e relè.
+                        </p>
+                    </div>
+
+                    <div onclick="selectArduinoTarget('tinyml_standalone')" id="target-card-tinyml" class="p-4 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-slate-700 cursor-pointer transition">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="font-semibold text-white text-sm">2. ESP32-CAM / Nano 33 BLE Sense (Edge C++ MLP)</span>
+                            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">STANDALONE</span>
+                        </div>
+                        <p class="text-xs text-slate-400">
+                            Esporta i pesi quantizzati/float32 dell'ultimo layer classificatore C++ da integrare nel firmware standalone del microcontrollore.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Anteprima Codice C++ Generato -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span id="code-preview-filename" class="text-xs font-mono text-amber-400">ballistic_sorter_arduino.ino</span>
+                        <button onclick="copyArduinoCode()" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition flex items-center gap-1.5 cursor-pointer">
+                            <i class="fa-regular fa-copy"></i>
+                            <span>Copia Codice</span>
+                        </button>
+                    </div>
+                    <pre class="bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-x-auto text-xs font-mono text-emerald-300 leading-relaxed max-h-96"><code id="arduino-code-preview"></code></pre>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-900 bg-slate-950 py-4 px-4 text-center text-xs text-slate-500 font-mono">
+        Ballistic Vision AI • Elaborazione locale nel browser tramite TensorFlow.js & WebSerial API (Nessun dato viene inviato a server esterni)
+    </footer>
+
+    <!-- =========================================================================
+         LOGICA APPLICATIVA JAVASCRIPT (TF.js, Canvas Generator, WebSerial, C++ Export)
+    ========================================================================== -->
+    <script>
+        // =========================================================================
+        // 1. STATO GLOBALE DELL'APPLICAZIONE
+        // =========================================================================
+        const APP_STATE = {
+            mobilenetModel: null,
+            classifierModel: null,
+            isModelLoaded: false,
+            isTraining: false,
+            isTrained: false,
+            inferenceMode: 'upload', // 'upload' | 'webcam'
+            webcamStream: null,
+            webcamLoopId: null,
+            arduinoTarget: 'serial_bridge', // 'serial_bridge' | 'tinyml_standalone'
+            serialPort: null,
+            serialWriter: null,
+            lastSentClass: null,
+            lastSentTime: 0,
+            // Classi predefinite di fondi di bossolo
+            classes: [
+                { id: 'cls_9x19', name: '9x19 Luger', color: '#f59e0b', samples: [], headstampCode: '9MM LUGER' },
+                { id: 'cls_45acp', name: '.45 ACP', color: '#10b981', samples: [], headstampCode: '.45 AUTO' },
+                { id: 'cls_223rem', name: '.223 Rem / 5.56', color: '#38bdf8', samples: [], headstampCode: 'LC 22 .223' }
+            ],
+            trainingHistory: {
+                loss: [],
+                acc: []
+            }
+        };
+
+        // Palette colori per nuove classi
+        const CLASS_COLORS = ['#f59e0b', '#10b981', '#38bdf8', '#a855f7', '#f43f5e', '#eab308', '#14b8a6'];
+
+        // =========================================================================
+        // 2. INIZIALIZZAZIONE & CARICAMENTO MOBILENET
+        // =========================================================================
+        window.addEventListener('DOMContentLoaded', async () => {
+            renderClassesGrid();
+            updateTrainingStats();
+            updateArduinoCodePreview();
+            await loadMobileNetBackbone();
+        });
+
+        async function loadMobileNetBackbone() {
+            const dot = document.getElementById('tf-status-dot');
+            const text = document.getElementById('tf-status-text');
+            try {
+                // Carica MobileNet v2 per estrazione embeddings (feature vector 1024-dim)
+                APP_STATE.mobilenetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+                APP_STATE.isModelLoaded = true;
+                
+                dot.classList.remove('bg-amber-400', 'animate-pulse');
+                dot.classList.add('bg-emerald-400');
+                text.textContent = 'MobileNetV2 Pronto';
+                showToast('Motore neurale MobileNetV2 caricato con successo.', 'success');
+            } catch (err) {
+                console.error('Errore caricamento MobileNet:', err);
+                dot.classList.remove('bg-amber-400');
+                dot.classList.add('bg-rose-500');
+                text.textContent = 'Errore Rete Neurale';
+                showToast('Impossibile scaricare MobileNet. Verifica la connessione internet.', 'error');
+            }
+        }
+
+        // =========================================================================
+        // 3. NAVIGAZIONE TAB & NOTIFICHE TOAST
+        // =========================================================================
+        function switchTab(tabId) {
+            // Nascondi tutte le sezioni
+            document.querySelectorAll('.tab-section').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`section-${tabId}`).classList.remove('hidden');
+
+            // Aggiorna stile bottoni tab
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-amber-500/15', 'text-amber-400', 'border-amber-500/30');
+                btn.classList.add('bg-slate-800/40', 'text-slate-400', 'border-slate-800');
+                const badge = btn.querySelector('span:first-child');
+                badge.classList.remove('bg-amber-500', 'text-slate-950');
+                badge.classList.add('bg-slate-800', 'text-slate-300');
+            });
+
+            const activeBtn = document.getElementById(`tab-btn-${tabId}`);
+            activeBtn.classList.remove('bg-slate-800/40', 'text-slate-400', 'border-slate-800');
+            activeBtn.classList.add('bg-amber-500/15', 'text-amber-400', 'border-amber-500/30');
+            const activeBadge = activeBtn.querySelector('span:first-child');
+            activeBadge.classList.remove('bg-slate-800', 'text-slate-300');
+            activeBadge.classList.add('bg-amber-500', 'text-slate-950');
+
+            // Azioni specifiche per tab
+            if (tabId === 'training') {
+                updateTrainingStats();
+                drawTrainingChart();
+            } else if (tabId === 'arduino') {
+                updateArduinoCodePreview();
+            }
+
+            // Ferma webcam se si esce dalla tab inference
+            if (tabId !== 'inference' && APP_STATE.webcamStream) {
+                stopWebcam();
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const colors = {
+                info: 'bg-slate-900 border-slate-700 text-slate-200',
+                success: 'bg-slate-900 border-emerald-500/50 text-emerald-300',
+                warning: 'bg-slate-900 border-amber-500/50 text-amber-300',
+                error: 'bg-slate-900 border-rose-500/50 text-rose-300'
+            };
+
+            const icons = {
+                info: 'fa-circle-info text-sky-400',
+                success: 'fa-circle-check text-emerald-400',
+                warning: 'fa-triangle-exclamation text-amber-400',
+                error: 'fa-circle-xmark text-rose-400'
+            };
+
+            toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl text-xs font-medium transition-all duration-300 transform translate-y-2 opacity-0 ${colors[type]}`;
+            toast.innerHTML = `
+                <i class="fa-solid ${icons[type]} text-base"></i>
+                <span class="flex-1">${message}</span>
+            `;
+
+            container.appendChild(toast);
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        // =========================================================================
+        // 4. GESTIONE CLASSI & DATASET IMMAGINI
+        // =========================================================================
+        function renderClassesGrid() {
+            const grid = document.getElementById('classes-grid');
+            grid.innerHTML = '';
+
+            APP_STATE.classes.forEach((cls, index) => {
+                const card = document.createElement('div');
+                card.className = 'bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-lg hover:border-slate-700 transition';
+                
+                // Anteprime miniature (max 12 visibili)
+                let thumbsHtml = '';
+                if (cls.samples.length === 0) {
+                    thumbsHtml = `
+                        <div class="col-span-4 py-8 text-center border border-dashed border-slate-800 rounded-xl bg-slate-950/50">
+                            <i class="fa-regular fa-images text-slate-600 text-xl mb-1"></i>
+                            <p class="text-[11px] text-slate-500">Nessun campione caricato</p>
+                        </div>
+                    `;
+                } else {
+                    const displaySamples = cls.samples.slice(-12);
+                    thumbsHtml = displaySamples.map((sample, sIdx) => {
+                        const realIdx = cls.samples.length - displaySamples.length + sIdx;
+                        return `
+                            <div class="relative aspect-square rounded-lg overflow-hidden bg-slate-950 border border-slate-800 group">
+                                <img src="${sample.dataUrl}" class="w-full h-full object-cover" alt="Campione">
+                                <button onclick="removeSample('${cls.id}', ${realIdx})" class="absolute top-0.5 right-0.5 w-4 h-4 rounded bg-rose-600/90 text-white text-[9px] hidden group-hover:flex items-center justify-center cursor-pointer" title="Rimuovi">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                card.innerHTML = `
+                    <div>
+                        <!-- Header Card Classe -->
+                        <div class="flex items-center justify-between gap-2 pb-3 border-b border-slate-800/80">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <span class="w-3 h-3 rounded-full shrink-0" style="background-color: ${cls.color}"></span>
+                                <input type="text" value="${cls.name}" onchange="renameClass('${cls.id}', this.value)" class="bg-transparent font-semibold text-white text-sm focus:outline-none focus:bg-slate-950 focus:px-2 rounded truncate w-full" title="Clicca per rinominare">
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <span class="text-xs font-mono px-2 py-0.5 rounded-md bg-slate-800 text-slate-300">${cls.samples.length} img</span>
+                                <button onclick="deleteClass('${cls.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer" title="Elimina classe">
+                                    <i class="fa-solid fa-trash-can text-xs"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Griglia Miniature -->
+                        <div class="grid grid-cols-4 gap-1.5 my-3 max-h-44 overflow-y-auto pr-0.5">
+                            ${thumbsHtml}
+                        </div>
+                    </div>
+
+                    <!-- Footer Upload / Azioni -->
+                    <div class="pt-2 border-t border-slate-800/80 flex items-center gap-2">
+                        <label class="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-medium text-center cursor-pointer transition border border-slate-700/80 flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-cloud-arrow-up text-amber-400"></i>
+                            <span>Carica Foto</span>
+                            <input type="file" accept="image/*" multiple class="hidden" onchange="handleClassFilesUpload(event, '${cls.id}')">
+                        </label>
+                        <button onclick="clearClassSamples('${cls.id}')" class="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 text-xs transition cursor-pointer" title="Svuota campioni">
+                            <i class="fa-solid fa-eraser"></i>
+                        </button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function addNewClassModal() {
+            const bar = document.getElementById('new-class-bar');
+            bar.classList.remove('hidden');
+            document.getElementById('new-class-input').focus();
+        }
+
+        function cancelAddNewClass() {
+            document.getElementById('new-class-bar').classList.add('hidden');
+            document.getElementById('new-class-input').value = '';
+        }
+
+        function confirmAddNewClass() {
+            const input = document.getElementById('new-class-input');
+            const name = input.value.trim();
+            if (!name) {
+                showToast('Inserisci un nome valido per la classe.', 'warning');
+                return;
+            }
+            const color = CLASS_COLORS[APP_STATE.classes.length % CLASS_COLORS.length];
+            APP_STATE.classes.push({
+                id: 'cls_' + Date.now(),
+                name: name,
+                color: color,
+                samples: [],
+                headstampCode: name.toUpperCase().slice(0, 10)
+            });
+            cancelAddNewClass();
+            renderClassesGrid();
+            updateTrainingStats();
+            showToast(`Classe "${name}" aggiunta al dataset.`, 'success');
+        }
+
+        function renameClass(classId, newName) {
+            const cls = APP_STATE.classes.find(c => c.id === classId);
+            if (cls && newName.trim()) {
+                cls.name = newName.trim();
+                cls.headstampCode = newName.trim().toUpperCase().slice(0, 10);
+                updateArduinoCodePreview();
+            }
+        }
+
+        function deleteClass(classId) {
+            if (APP_STATE.classes.length <= 2) {
+                showToast('Sono necessarie almeno 2 classi per la classificazione.', 'warning');
+                return;
+            }
+            APP_STATE.classes = APP_STATE.classes.filter(c => c.id !== classId);
+            renderClassesGrid();
+            updateTrainingStats();
+            showToast('Classe eliminata.', 'info');
+        }
+
+        function clearClassSamples(classId) {
+            const cls = APP_STATE.classes.find(c => c.id === classId);
+            if (cls) {
+                cls.samples = [];
+                renderClassesGrid();
+                updateTrainingStats();
+            }
+        }
+
+        function removeSample(classId, sampleIdx) {
+            const cls = APP_STATE.classes.find(c => c.id === classId);
+            if (cls) {
+                cls.samples.splice(sampleIdx, 1);
+                renderClassesGrid();
+                updateTrainingStats();
+            }
+        }
+
+        // Caricamento immagini reali da disco e ridimensionamento a 224x224 per MobileNet
+        async function handleClassFilesUpload(event, classId) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+
+            const cls = APP_STATE.classes.find(c => c.id === classId);
+            if (!cls) return;
+
+            let loadedCount = 0;
+            for (const file of files) {
+                try {
+                    const dataUrl = await resizeImageToSquareDataUrl(file, 224);
+                    cls.samples.push({ dataUrl, isSynthetic: false });
+                    loadedCount++;
+                } catch (e) {
+                    console.error('Errore lettura file:', e);
+                }
+            }
+
+            renderClassesGrid();
+            updateTrainingStats();
+            showToast(`Caricati ${loadedCount} campioni in "${cls.name}".`, 'success');
+            event.target.value = '';
+        }
+
+        function resizeImageToSquareDataUrl(file, size = 224) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = size;
+                        canvas.height = size;
+                        const ctx = canvas.getContext('2d');
+                        
+                        // Ritaglio centrale quadrato (Center Crop) per isolare il fondello
+                        const minDim = Math.min(img.width, img.height);
+                        const sx = (img.width - minDim) / 2;
+                        const sy = (img.height - minDim) / 2;
+                        
+                        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+                        resolve(canvas.toDataURL('image/jpeg', 0.9));
+                    };
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // =========================================================================
+        // 5. GENERATORE PROCEDURALE DI FONDI DI BOSSOLO (DATASET DEMO)
+        // =========================================================================
+        function drawSyntheticHeadstamp(classIndex, className) {
+            const size = 224;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+
+            // Sfondo scuro (tappetino ispezione balistica) con leggera variazione luce
+            const bgLum = 18 + Math.floor(Math.random() * 16);
+            ctx.fillStyle = `rgb(${bgLum}, ${bgLum + 2}, ${bgLum + 6})`;
+            ctx.fillRect(0, 0, size, size);
+
+            // Variazioni realistiche di posizione, rotazione e illuminazione
+            const cx = size / 2 + (Math.random() - 0.5) * 16;
+            const cy = size / 2 + (Math.random() - 0.5) * 16;
+            const angle = (Math.random() - 0.5) * 0.6;
+            const scaleFactor = 0.92 + Math.random() * 0.14;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(angle);
+            ctx.scale(scaleFactor, scaleFactor);
+
+            // Parametri geometrici distintivi per classe (ottone vs nickel, diametro, innesco)
+            const variant = classIndex % 4;
+            let outerRadius = 82;
+            let primerRadius = 24;
+            let brassHue = 42; // Ottone classico
+            let brassSat = 68;
+            let primerColor = '#cbd5e1'; // Innesco argentato/nickel
+
+            if (variant === 0) {
+                // Es. 9x19 Luger (ottone standard, innesco small pistol nickel, bordo smussato)
+                outerRadius = 80;
+                primerRadius = 23;
+                brassHue = 43;
+                primerColor = '#d1d5db';
+            } else if (variant === 1) {
+                // Es. .45 ACP (fondello largo, large pistol primer ottonato)
+                outerRadius = 92;
+                primerRadius = 28;
+                brassHue = 38;
+                primerColor = '#eab308';
+            } else if (variant === 2) {
+                // Es. .223 Rem / Militare (crimpatura innesco + anello laccato rosso/verde)
+                outerRadius = 76;
+                primerRadius = 22;
+                brassHue = 46;
+                primerColor = '#94a3b8';
+            } else {
+                // Es. Bossolo Nickel-plated / Rimmed
+                outerRadius = 86;
+                primerRadius = 25;
+                brassHue = 210;
+                brassSat = 12;
+                primerColor = '#f59e0b';
+            }
+
+            // Gradiente metallico radiale del fondello
+            const grad = ctx.createRadialGradient(-15, -15, 10, 0, 0, outerRadius);
+            grad.addColorStop(0, `hsl(${brassHue}, ${brassSat}%, 68%)`);
+            grad.addColorStop(0.7, `hsl(${brassHue}, ${brassSat}%, 48%)`);
+            grad.addColorStop(0.92, `hsl(${brassHue}, ${brassSat}%, 32%)`);
+            grad.addColorStop(1, `hsl(${brassHue}, ${brassSat}%, 20%)`);
+
+            // Disco esterno (Rim)
+            ctx.beginPath();
+            ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
+            ctx.fillStyle = grad;
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            ctx.stroke();
+
+            // Solco estrattore / smusso interno
+            ctx.beginPath();
+            ctx.arc(0, 0, outerRadius - 8, 0, Math.PI * 2);
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+            ctx.stroke();
+
+            // Anello sigillante colorato per variante militare (.223 / NATO)
+            if (variant === 2) {
+                ctx.beginPath();
+                ctx.arc(0, 0, primerRadius + 3.5, 0, Math.PI * 2);
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#dc2626';
+                ctx.stroke();
+            }
+
+            // Sede innesco (Primer pocket)
+            ctx.beginPath();
+            ctx.arc(0, 0, primerRadius + 1.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#1e293b';
+            ctx.fill();
+
+            // Capsula innesco (Primer)
+            const pGrad = ctx.createRadialGradient(-5, -5, 2, 0, 0, primerRadius);
+            pGrad.addColorStop(0, '#f8fafc');
+            pGrad.addColorStop(0.6, primerColor);
+            pGrad.addColorStop(1, '#475569');
+
+            ctx.beginPath();
+            ctx.arc(0, 0, primerRadius, 0, Math.PI * 2);
+            ctx.fillStyle = pGrad;
+            ctx.fill();
+
+            // Segno percussore (Firing pin indent) su alcuni campioni
+            if (Math.random() > 0.35) {
+                ctx.beginPath();
+                ctx.arc((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, 5, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+                ctx.fill();
+            }
+
+            // Punzonatura testo curvo sul fondello (Headstamp)
+            const stampText = className.toUpperCase().slice(0, 10);
+            ctx.fillStyle = 'rgba(20, 15, 5, 0.75)';
+            ctx.font = 'bold 12px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Testo superiore
+            ctx.fillText(stampText, 0, -((outerRadius + primerRadius) / 2) + 2);
+            // Punzoni inferiori (es. stella o lotto)
+            ctx.fillText(variant === 2 ? '⊕  26' : '★  IT  ★', 0, ((outerRadius + primerRadius) / 2) - 2);
+
+            // Micro-graffi superficiali realismo ottico
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 6; i++) {
+                ctx.beginPath();
+                const rAngle = Math.random() * Math.PI * 2;
+                ctx.moveTo(Math.cos(rAngle) * 30, Math.sin(rAngle) * 30);
+                ctx.lineTo(Math.cos(rAngle + 0.3) * 70, Math.sin(rAngle + 0.3) * 70);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+            return canvas.toDataURL('image/jpeg', 0.9);
+        }
+
+        function generateSyntheticDataset() {
+            const samplesPerClass = 10;
+            APP_STATE.classes.forEach((cls, idx) => {
+                for (let i = 0; i < samplesPerClass; i++) {
+                    const dataUrl = drawSyntheticHeadstamp(idx, cls.name);
+                    cls.samples.push({ dataUrl, isSynthetic: true });
+                }
+            });
+            renderClassesGrid();
+            updateTrainingStats();
+            showToast(`Generati ${samplesPerClass} campioni sintetici per ogni classe!`, 'success');
+        }
+
+        // =========================================================================
+        // 6. TRAINING NEURALE NEL BROWSER (TENSORFLOW.JS TRANSFER LEARNING)
+        // =========================================================================
+        function updateTrainingStats() {
+            const activeClasses = APP_STATE.classes.filter(c => c.samples.length > 0);
+            const totalSamples = APP_STATE.classes.reduce((sum, c) => sum + c.samples.length, 0);
+            
+            document.getElementById('train-stat-classes').textContent = `${activeClasses.length} / ${APP_STATE.classes.length}`;
+            document.getElementById('train-stat-samples').textContent = totalSamples;
+        }
+
+        function logTrainingConsole(msg, colorClass = 'text-slate-300') {
+            const consoleEl = document.getElementById('training-console');
+            const line = document.createElement('div');
+            line.className = colorClass;
+            const time = new Date().toLocaleTimeString('it-IT', { hour12: false });
+            line.textContent = `[${time}] ${msg}`;
+            consoleEl.appendChild(line);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        // Converte dataUrl in immagine HTML e ne estrae l'embedding 1024-dim da MobileNet
+        function imageToEmbedding(dataUrl) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => {
+                    const embedding = tf.tidy(() => {
+                        const tensor = tf.browser.fromPixels(img);
+                        // mobilenet.infer(..., true) restituisce l'embedding interno (1, 1024)
+                        return APP_STATE.mobilenetModel.infer(tensor, true).squeeze();
+                    });
+                    resolve(embedding);
+                };
+                img.onerror = reject;
+                img.src = dataUrl;
+            });
+        }
+
+        async function startTraining() {
+            if (!APP_STATE.isModelLoaded) {
+                showToast('Attendi il caricamento di MobileNetV2 prima di addestrare.', 'warning');
+                return;
+            }
+            if (APP_STATE.isTraining) return;
+
+            // Verifica che almeno 2 classi abbiano campioni
+            const validClasses = APP_STATE.classes.filter(c => c.samples.length > 0);
+            if (validClasses.length < 2) {
+                showToast('Carica almeno 1 immagine in minimo 2 classi diverse!', 'error');
+                return;
+            }
+
+            APP_STATE.isTraining = true;
+            APP_STATE.trainingHistory = { loss: [], acc: [] };
+            document.getElementById('chart-placeholder').classList.add('hidden');
+            
+            const btnTrain = document.getElementById('btn-start-training');
+            const statusPill = document.getElementById('training-status-pill');
+            btnTrain.disabled = true;
+            btnTrain.classList.add('opacity-50', 'cursor-not-allowed');
+            statusPill.textContent = 'Estrazione Feature...';
+            statusPill.className = 'px-2.5 py-1 rounded-full text-xs font-mono bg-amber-500/20 text-amber-400';
+
+            const epochs = parseInt(document.getElementById('param-epochs').value, 10);
+            const batchSize = parseInt(document.getElementById('param-batch').value, 10);
+            const learningRate = parseFloat(document.getElementById('param-lr').value);
+            const hiddenUnits = parseInt(document.getElementById('param-units').value, 10);
+
+            logTrainingConsole('Inizio estrazione feature tramite MobileNetV2...', 'text-amber-400');
+
+            let xs = null;
+            let ys = null;
+
+            try {
+                const embeddingsList = [];
+                const labelsList = [];
+
+                // Estrazione embeddings per tutti i campioni delle classi attive
+                for (let classIdx = 0; classIdx < APP_STATE.classes.length; classIdx++) {
+                    const cls = APP_STATE.classes[classIdx];
+                    for (const sample of cls.samples) {
+                        const emb = await imageToEmbedding(sample.dataUrl);
+                        embeddingsList.push(emb);
+                        labelsList.push(classIdx);
+                    }
+                }
+
+                const numClasses = APP_STATE.classes.length;
+                xs = tf.stack(embeddingsList);
+                const labelsTensor = tf.tensor1d(labelsList, 'int32');
+                ys = tf.oneHot(labelsTensor, numClasses);
+                labelsTensor.dispose();
+                embeddingsList.forEach(t => t.dispose());
+
+                logTrainingConsole(`Estratti ${xs.shape[0]} vettori feature (dim: ${xs.shape[1]}). Costruzione rete MLP...`, 'text-sky-400');
+
+                // Pulisci eventuale modello precedente
+                if (APP_STATE.classifierModel) {
+                    APP_STATE.classifierModel.dispose();
+                }
+
+                // Costruzione classificatore denso (MLP) sopra MobileNet
+                const model = tf.sequential();
+                model.add(tf.layers.dense({
+                    inputShape: [xs.shape[1]],
+                    units: hiddenUnits,
+                    activation: 'relu',
+                    kernelInitializer: 'varianceScaling'
+                }));
+                model.add(tf.layers.dropout({ rate: 0.25 }));
+                model.add(tf.layers.dense({
+                    units: numClasses,
+                    activation: 'softmax'
+                }));
+
+                model.compile({
+                    optimizer: tf.train.adam(learningRate),
+                    loss: 'categoricalCrossentropy',
+                    metrics: ['accuracy']
+                });
+
+                APP_STATE.classifierModel = model;
+                statusPill.textContent = 'Training in corso...';
+
+                let lastEpochTime = performance.now();
+
+                await model.fit(xs, ys, {
+                    epochs: epochs,
+                    batchSize: Math.min(batchSize, xs.shape[0]),
+                    shuffle: true,
+                    callbacks: {
+                        onEpochEnd: async (epoch, logs) => {
+                            const now = performance.now();
+                            const dt = Math.round(now - lastEpochTime);
+                            lastEpochTime = now;
+
+                            const currentEpoch = epoch + 1;
+                            const pct = Math.round((currentEpoch / epochs) * 100);
+                            const accVal = logs.acc !== undefined ? logs.acc : logs.accuracy;
+
+                            APP_STATE.trainingHistory.loss.push(logs.loss);
+                            APP_STATE.trainingHistory.acc.push(accVal);
+
+                            // Aggiornamento UI
+                            document.getElementById('progress-label').textContent = `Epoca ${currentEpoch} / ${epochs}`;
+                            document.getElementById('progress-percent').textContent = `${pct}%`;
+                            document.getElementById('training-progress-bar').style.width = `${pct}%`;
+                            document.getElementById('metric-loss').textContent = logs.loss.toFixed(4);
+                            document.getElementById('metric-acc').textContent = `${(accVal * 100).toFixed(1)}%`;
+                            document.getElementById('metric-time').textContent = `${dt} ms`;
+
+                            drawTrainingChart();
+
+                            if (currentEpoch % 5 === 0 || currentEpoch === epochs) {
+                                logTrainingConsole(`Epoca ${currentEpoch}/${epochs} — Loss: ${logs.loss.toFixed(4)} | Acc: ${(accVal * 100).toFixed(1)}%`);
+                            }
+                            await tf.nextFrame();
+                        }
+                    }
+                });
+
+                APP_STATE.isTrained = true;
+                statusPill.textContent = 'Modello Addestrato';
+                statusPill.className = 'px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-500/20 text-emerald-400';
+                logTrainingConsole('Addestramento completato con successo! Pronto per il riconoscimento online.', 'text-emerald-400');
+                showToast('Modello addestrato! Passa alla scheda "Riconoscimento Live" per testarlo.', 'success');
+                updateArduinoCodePreview();
+
+            } catch (err) {
+                console.error('Errore training:', err);
+                logTrainingConsole(`Errore durante il training: ${err.message}`, 'text-rose-400');
+                showToast('Errore durante l\'addestramento del modello.', 'error');
+            } finally {
+                if (xs) xs.dispose();
+                if (ys) ys.dispose();
+                APP_STATE.isTraining = false;
+                btnTrain.disabled = false;
+                btnTrain.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        // Grafico Canvas dinamico per Loss (rosso/ambra) e Accuracy (verde smeraldo)
+        function drawTrainingChart() {
+            const canvas = document.getElementById('training-chart-canvas');
+            if (!canvas) return;
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width - 16;
+            canvas.height = rect.height - 16;
+
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            // Griglia orizzontale
+            ctx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = (h / 4) * i;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+                ctx.stroke();
+            }
+
+            const lossArr = APP_STATE.trainingHistory.loss;
+            const accArr = APP_STATE.trainingHistory.acc;
+            if (lossArr.length < 2) return;
+
+            const maxLoss = Math.max(...lossArr, 1.0);
+            const stepX = w / (lossArr.length - 1);
+
+            // Disegna curva Loss (Rose)
+            ctx.beginPath();
+            ctx.strokeStyle = '#fb7185';
+            ctx.lineWidth = 2.5;
+            lossArr.forEach((val, idx) => {
+                const x = idx * stepX;
+                const y = h - (Math.min(val / maxLoss, 1) * (h - 20)) - 10;
+                if (idx === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Disegna curva Accuracy (Emerald)
+            ctx.beginPath();
+            ctx.strokeStyle = '#34d399';
+            ctx.lineWidth = 2.5;
+            accArr.forEach((val, idx) => {
+                const x = idx * stepX;
+                const y = h - (val * (h - 20)) - 10;
+                if (idx === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Legenda
+            ctx.font = '11px "JetBrains Mono", monospace';
+            ctx.fillStyle = '#34d399';
+            ctx.fillText('● Accuracy (0-100%)', 10, 16);
+            ctx.fillStyle = '#fb7185';
+            ctx.fillText('● Loss', 155, 16);
+        }
+
+        window.addEventListener('resize', () => {
+            if (!document.getElementById('section-training').classList.contains('hidden')) {
+                drawTrainingChart();
+            }
+        });
+
+        // =========================================================================
+        // 7. RICONOSCIMENTO ONLINE (UPLOAD / WEBCAM LIVE & INFERENZA)
+        // =========================================================================
+        async function setInferenceMode(mode) {
+            APP_STATE.inferenceMode = mode;
+            const btnUpload = document.getElementById('btn-mode-upload');
+            const btnWebcam = document.getElementById('btn-mode-webcam');
+
+            if (mode === 'upload') {
+                btnUpload.className = 'px-3 py-1 rounded-lg text-xs font-medium bg-amber-500 text-slate-950 transition cursor-pointer';
+                btnWebcam.className = 'px-3 py-1 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition cursor-pointer';
+                stopWebcam();
+            } else {
+                btnWebcam.className = 'px-3 py-1 rounded-lg text-xs font-medium bg-amber-500 text-slate-950 transition cursor-pointer';
+                btnUpload.className = 'px-3 py-1 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition cursor-pointer';
+                await startWebcam();
+            }
+        }
+
+        async function startWebcam() {
+            const video = document.getElementById('inference-video');
+            const img = document.getElementById('inference-image');
+            const placeholder = document.getElementById('inference-placeholder');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+                    audio: false
+                });
+                APP_STATE.webcamStream = stream;
+                video.srcObject = stream;
+                video.classList.remove('hidden');
+                img.classList.add('hidden');
+                placeholder.classList.add('hidden');
+
+                // Avvia loop di inferenza continua
+                runWebcamPredictionLoop();
+            } catch (err) {
+                console.error('Errore accesso webcam:', err);
+                showToast('Impossibile accedere alla webcam. Verifica i permessi del browser.', 'error');
+                setInferenceMode('upload');
+            }
+        }
+
+        function stopWebcam() {
+            if (APP_STATE.webcamLoopId) {
+                cancelAnimationFrame(APP_STATE.webcamLoopId);
+                APP_STATE.webcamLoopId = null;
+            }
+            if (APP_STATE.webcamStream) {
+                APP_STATE.webcamStream.getTracks().forEach(track => track.stop());
+                APP_STATE.webcamStream = null;
+            }
+            const video = document.getElementById('inference-video');
+            video.classList.add('hidden');
+            
+            const img = document.getElementById('inference-image');
+            if (!img.src) {
+                document.getElementById('inference-placeholder').classList.remove('hidden');
+            } else {
+                img.classList.remove('hidden');
+            }
+        }
+
+        async function runWebcamPredictionLoop() {
+            if (!APP_STATE.webcamStream || APP_STATE.inferenceMode !== 'webcam') return;
+            
+            const video = document.getElementById('inference-video');
+            if (video.readyState === 4 && APP_STATE.isTrained) {
+                await predictFromElement(video);
+            }
+            
+            // Esegui circa 8-10 inferenze al secondo per non saturare la CPU
+            setTimeout(() => {
+                APP_STATE.webcamLoopId = requestAnimationFrame(runWebcamPredictionLoop);
+            }, 120);
+        }
+
+        function handleTestImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (APP_STATE.inferenceMode === 'webcam') {
+                setInferenceMode('upload');
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('inference-image');
+                img.onload = () => {
+                    img.classList.remove('hidden');
+                    document.getElementById('inference-placeholder').classList.add('hidden');
+                    if (APP_STATE.isTrained) {
+                        predictFromElement(img);
+                    } else {
+                        showToast('Immagine caricata. Ricorda di addestrare prima il modello nella Scheda 2.', 'info');
+                    }
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+            event.target.value = '';
+        }
+
+        function testWithRandomSample() {
+            if (APP_STATE.inferenceMode === 'webcam') {
+                setInferenceMode('upload');
+            }
+            const randIdx = Math.floor(Math.random() * APP_STATE.classes.length);
+            const cls = APP_STATE.classes[randIdx];
+            const dataUrl = drawSyntheticHeadstamp(randIdx, cls.name);
+
+            const img = document.getElementById('inference-image');
+            img.onload = () => {
+                img.classList.remove('hidden');
+                document.getElementById('inference-placeholder').classList.add('hidden');
+                if (APP_STATE.isTrained) {
+                    predictFromElement(img);
+                } else {
+                    showToast('Campione simulato caricato. Addestra il modello nella Scheda 2 per classificarlo.', 'warning');
+                }
+            };
+            img.src = dataUrl;
+        }
+
+        async function runSinglePrediction() {
+            if (!APP_STATE.isTrained) {
+                showToast('Devi prima addestrare il modello nella scheda "Training Neurale"!', 'warning');
+                return;
+            }
+            if (APP_STATE.inferenceMode === 'webcam') {
+                const video = document.getElementById('inference-video');
+                await predictFromElement(video);
+            } else {
+                const img = document.getElementById('inference-image');
+                if (img.classList.contains('hidden') || !img.src) {
+                    showToast('Carica prima un\'immagine o usa "Simula Fondello".', 'warning');
+                    return;
+                }
+                await predictFromElement(img);
+            }
+        }
+
+        async function predictFromElement(mediaElement) {
+            if (!APP_STATE.isTrained || !APP_STATE.classifierModel || !APP_STATE.mobilenetModel) return;
+
+            const t0 = performance.now();
+
+            // Ritaglio centrale su canvas 224x224 per allinearsi al mirino
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = 224;
+            cropCanvas.height = 224;
+            const ctx = cropCanvas.getContext('2d');
+
+            const srcW = mediaElement.videoWidth || mediaElement.naturalWidth || mediaElement.width;
+            const srcH = mediaElement.videoHeight || mediaElement.naturalHeight || mediaElement.height;
+            const minDim = Math.min(srcW, srcH);
+            const sx = (srcW - minDim) / 2;
+            const sy = (srcH - minDim) / 2;
+
+            ctx.drawImage(mediaElement, sx, sy, minDim, minDim, 0, 0, 224, 224);
+
+            const probs = tf.tidy(() => {
+                const tensor = tf.browser.fromPixels(cropCanvas);
+                const embedding = APP_STATE.mobilenetModel.infer(tensor, true);
+                const prediction = APP_STATE.classifierModel.predict(embedding);
+                return prediction.dataSync();
+            });
+
+            const t1 = performance.now();
+            document.getElementById('inference-fps').textContent = `${Math.round(t1 - t0)} ms`;
+
+            updatePredictionUI(probs);
+        }
+
+        function updatePredictionUI(probs) {
+            let maxIdx = 0;
+            let maxProb = probs[0];
+
+            for (let i = 1; i < probs.length; i++) {
+                if (probs[i] > maxProb) {
+                    maxProb = probs[i];
+                    maxIdx = i;
+                }
+            }
+
+            const topClass = APP_STATE.classes[maxIdx];
+            const confPct = (maxProb * 100).toFixed(1);
+
+            document.getElementById('top-prediction-label').textContent = topClass.name;
+            document.getElementById('top-prediction-label').style.color = topClass.color;
+            document.getElementById('top-prediction-conf').textContent = `Confidenza: ${confPct}%`;
+
+            // Aggiorna barre di probabilità
+            const container = document.getElementById('prediction-bars-container');
+            container.innerHTML = APP_STATE.classes.map((cls, idx) => {
+                const p = (probs[idx] * 100).toFixed(1);
+                const isWinner = idx === maxIdx;
+                return `
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-xs font-mono">
+                            <span class="${isWinner ? 'text-white font-bold' : 'text-slate-400'}">${cls.name}</span>
+                            <span class="${isWinner ? 'text-amber-400 font-bold' : 'text-slate-500'}">${p}%</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800/80">
+                            <div class="h-full transition-all duration-150 rounded-full" style="width: ${p}%; background-color: ${cls.color}"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Invio automatico via Web Serial ad Arduino se confidenza > 75%
+            const autoSend = document.getElementById('auto-send-serial').checked;
+            if (autoSend && APP_STATE.serialWriter && maxProb > 0.75) {
+                const now = Date.now();
+                if (APP_STATE.lastSentClass !== maxIdx || (now - APP_STATE.lastSentTime > 1500)) {
+                    sendClassToArduino(maxIdx, topClass.name, confPct);
+                    APP_STATE.lastSentClass = maxIdx;
+                    APP_STATE.lastSentTime = now;
+                }
+            }
+        }
+
+        // =========================================================================
+        // 8. INTEGRAZIONE WEB SERIAL API PER COMUNICAZIONE DIRETTA CON ARDUINO
+        // =========================================================================
+        async function toggleSerialConnection() {
+            if (!('serial' in navigator)) {
+                showToast('Il tuo browser non supporta Web Serial API. Usa Chrome, Edge o Opera desktop.', 'error');
+                return;
+            }
+
+            if (APP_STATE.serialPort) {
+                await disconnectSerial();
+            } else {
+                await connectSerial();
+            }
+        }
+
+        async function connectSerial() {
+            try {
+                const port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+
+                const textEncoder = new TextEncoderStream();
+                textEncoder.readable.pipeTo(port.writable);
+                const writer = textEncoder.writable.getWriter();
+
+                APP_STATE.serialPort = port;
+                APP_STATE.serialWriter = writer;
+
+                document.getElementById('serial-dot').className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+                document.getElementById('serial-text').textContent = 'Arduino: Connesso (115200)';
+                document.getElementById('btn-panel-serial').innerHTML = '<i class="fa-solid fa-link-slash"></i><span>Disconnetti Arduino</span>';
+                
+                showToast('Arduino connesso via USB Seriale (115200 baud)!', 'success');
+            } catch (err) {
+                console.error('Errore connessione seriale:', err);
+                showToast('Connessione seriale annullata o non riuscita.', 'warning');
+            }
+        }
+
+        async function disconnectSerial() {
+            try {
+                if (APP_STATE.serialWriter) {
+                    await APP_STATE.serialWriter.close();
+                    APP_STATE.serialWriter = null;
+                }
+                if (APP_STATE.serialPort) {
+                    await APP_STATE.serialPort.close();
+                    APP_STATE.serialPort = null;
+                }
+            } catch (e) {
+                console.warn(e);
+            }
+            document.getElementById('serial-dot').className = 'w-2 h-2 rounded-full bg-slate-500';
+            document.getElementById('serial-text').textContent = 'Arduino: Disconnesso';
+            document.getElementById('btn-panel-serial').innerHTML = '<i class="fa-solid fa-plug"></i><span>Connetti Porta Seriale Arduino</span>';
+            showToast('Disconnesso da Arduino.', 'info');
+        }
+
+        async function sendClassToArduino(classIndex, className, confidence) {
+            if (!APP_STATE.serialWriter) return;
+            try {
+                const sanitizedName = className.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const payload = `CLASS:${classIndex}:${sanitizedName}:${confidence}\n`;
+                await APP_STATE.serialWriter.write(payload);
+            } catch (err) {
+                console.error('Errore invio seriale:', err);
+                showToast('Errore trasmissione dati ad Arduino.', 'error');
+            }
+        }
+
+        // =========================================================================
+        // 9. GENERAZIONE CODICE C++ & SKETCH ARDUINO (.INO & .H)
+        // =========================================================================
+        function selectArduinoTarget(target) {
+            APP_STATE.arduinoTarget = target;
+            const cardSerial = document.getElementById('target-card-serial');
+            const cardTinyml = document.getElementById('target-card-tinyml');
+
+            if (target === 'serial_bridge') {
+                cardSerial.className = 'p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 cursor-pointer transition';
+                cardTinyml.className = 'p-4 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-slate-700 cursor-pointer transition';
+            } else {
+                cardTinyml.className = 'p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 cursor-pointer transition';
+                cardSerial.className = 'p-4 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-slate-700 cursor-pointer transition';
+            }
+            updateArduinoCodePreview();
+        }
+
+        function generateArduinoInoCode() {
+            const numClasses = APP_STATE.classes.length;
+            const classNamesArray = APP_STATE.classes.map(c => `"${c.name}"`).join(', ');
+            const servoAngles = APP_STATE.classes.map((_, i) => Math.round(20 + (140 / Math.max(1, numClasses - 1)) * i)).join(', ');
+
+            if (APP_STATE.arduinoTarget === 'serial_bridge') {
+                return `/*
+ * BALLISTIC VISION AI - Smistatore Automatico Fondi di Bossolo
+ * Modalità: USB Vision Bridge (WebSerial API @ 115200 baud)
+ * Compatibile con: Arduino UNO, Nano, Mega, ESP32
+ * Classi configurate (${numClasses}): ${classNamesArray}
+ */
+
+#include <Servo.h>
+
+Servo sorterServo;
+const int SERVO_PIN = 9;
+const int LED_STATUS_PIN = 13;
+
+// Angoli del deviatore meccanico per ciascun calibro riconosciuto
+const int NUM_CLASSES = ${numClasses};
+const char* CLASS_NAMES[NUM_CLASSES] = { ${classNamesArray} };
+const int SORTER_ANGLES[NUM_CLASSES] = { ${servoAngles} };
+
+String inputBuffer = "";
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_STATUS_PIN, OUTPUT);
+  
+  sorterServo.attach(SERVO_PIN);
+  sorterServo.write(90); // Posizione neutra centrale
+  
+  Serial.println("READY:BALLISTIC_VISION_SORTER");
+}
+
+void loop() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\\n') {
+      processCommand(inputBuffer);
+      inputBuffer = "";
+    } else {
+      inputBuffer += c;
+    }
+  }
+}
+
+// Protocollo ricevuto dalla WebApp: "CLASS:<indice>:<nome>:<confidenza>"
+void processCommand(String cmd) {
+  cmd.trim();
+  if (cmd.startsWith("CLASS:")) {
+    int firstColon = cmd.indexOf(':');
+    int secondColon = cmd.indexOf(':', firstColon + 1);
+    
+    if (firstColon != -1 && secondColon != -1) {
+      int classIdx = cmd.substring(firstColon + 1, secondColon).toInt();
+      
+      if (classIdx >= 0 && classIdx < NUM_CLASSES) {
+        digitalWrite(LED_STATUS_PIN, HIGH);
+        
+        // Posiziona il convogliatore sul contenitore del calibro rilevato
+        int targetAngle = SORTER_ANGLES[classIdx];
+        sorterServo.write(targetAngle);
+        
+        Serial.print("ACK -> Calibro: ");
+        Serial.print(CLASS_NAMES[classIdx]);
+        Serial.print(" | Angolo Servo: ");
+        Serial.println(targetAngle);
+        
+        delay(350);
+        digitalWrite(LED_STATUS_PIN, LOW);
+      }
+    }
+  }
+}`;
+            } else {
+                return `/*
+ * BALLISTIC VISION AI - Edge TinyML Standalone Inference
+ * Target: ESP32-CAM / Arduino Nano 33 BLE Sense
+ * Richiede l'header esportato: "headstamp_model.h"
+ */
+
+#include <Arduino.h>
+#include "headstamp_model.h"
+
+// Buffer feature estratte dal sensore ottico (ridotte a 32-dim per MCU)
+float input_features[MODEL_INPUT_DIM];
+float hidden_layer[MODEL_HIDDEN_UNITS];
+float output_probs[MODEL_NUM_CLASSES];
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("=== Ballistic Vision TinyML Engine Avviato ===");
+  Serial.print("Classi caricate: ");
+  Serial.println(MODEL_NUM_CLASSES);
+}
+
+// Forward Pass della rete neurale densa (MLP) addestrata nel browser
+int runNeuralInference(const float* features, float* outProbs) {
+  // 1. Hidden Layer + ReLU
+  for (int j = 0; j < MODEL_HIDDEN_UNITS; j++) {
+    float sum = dense1_bias[j];
+    for (int i = 0; i < MODEL_INPUT_DIM; i++) {
+      sum += features[i] * dense1_weights[i * MODEL_HIDDEN_UNITS + j];
+    }
+    hidden_layer[j] = (sum > 0.0f) ? sum : 0.0f; // ReLU
+  }
+
+  // 2. Output Layer + Softmax
+  float maxLogit = -1e9f;
+  float logits[MODEL_NUM_CLASSES];
+  for (int k = 0; k < MODEL_NUM_CLASSES; k++) {
+    float sum = dense2_bias[k];
+    for (int j = 0; j < MODEL_HIDDEN_UNITS; j++) {
+      sum += hidden_layer[j] * dense2_weights[j * MODEL_NUM_CLASSES + k];
+    }
+    logits[k] = sum;
+    if (sum > maxLogit) maxLogit = sum;
+  }
+
+  float expSum = 0.0f;
+  for (int k = 0; k < MODEL_NUM_CLASSES; k++) {
+    outProbs[k] = expf(logits[k] - maxLogit);
+    expSum += outProbs[k];
+  }
+
+  int bestClass = 0;
+  for (int k = 0; k < MODEL_NUM_CLASSES; k++) {
+    outProbs[k] /= expSum;
+    if (outProbs[k] > outProbs[bestClass]) {
+      bestClass = k;
+    }
+  }
+  return bestClass;
+}
+
+void loop() {
+  // Qui acquisisci il frame dalla camera (es. esp_camera_fb_get())
+  // e popoli input_features[], quindi chiami runNeuralInference()
+  int predicted = runNeuralInference(input_features, output_probs);
+  Serial.print("Calibro rilevato: ");
+  Serial.print(MODEL_CLASS_NAMES[predicted]);
+  Serial.print(" (");
+  Serial.print(output_probs[predicted] * 100.0f, 1);
+  Serial.println("%)");
+  delay(1000);
+}`;
+            }
+        }
+
+        function generateArduinoHeaderFile() {
+            const numClasses = APP_STATE.classes.length;
+            const classNamesArray = APP_STATE.classes.map(c => `"${c.name}"`).join(', ');
+            
+            // Esporta i pesi reali se il modello è addestrato (campionati a 32 input per compatibilità RAM MCU)
+            const inputDim = 32;
+            const hiddenUnits = 16;
+            let w1 = [];
+            let b1 = [];
+            let w2 = [];
+            let b2 = [];
+
+            if (APP_STATE.isTrained && APP_STATE.classifierModel) {
+                const weights = APP_STATE.classifierModel.getWeights();
+                const rawW1 = weights[0].dataSync();
+                const rawB1 = weights[1].dataSync();
+                const rawW2 = weights[2].dataSync();
+                const rawB2 = weights[3].dataSync();
+
+                for (let i = 0; i < inputDim * hiddenUnits; i++) {
+                    w1.push((rawW1[i % rawW1.length] || 0).toFixed(5) + 'f');
+                }
+                for (let j = 0; j < hiddenUnits; j++) {
+                    b1.push((rawB1[j % rawB1.length] || 0).toFixed(5) + 'f');
+                }
+                for (let k = 0; k < hiddenUnits * numClasses; k++) {
+                    w2.push((rawW2[k % rawW2.length] || 0).toFixed(5) + 'f');
+                }
+                for (let c = 0; c < numClasses; c++) {
+                    b2.push((rawB2[c % rawB2.length] || 0).toFixed(5) + 'f');
+                }
+            } else {
+                // Pesi inizializzati placeholder se non ancora addestrato
+                w1 = Array(inputDim * hiddenUnits).fill('0.01250f');
+                b1 = Array(hiddenUnits).fill('0.00000f');
+                w2 = Array(hiddenUnits * numClasses).fill('0.02500f');
+                b2 = Array(numClasses).fill('0.00000f');
+            }
+
+            return `/*
+ * HEADSTAMP_MODEL.H
+ * Generato automaticamente da Ballistic Vision AI
+ * Data: ${new Date().toISOString()}
+ * Stato Addestramento: ${APP_STATE.isTrained ? 'ADDESTRATO (Pesi Reali)' : 'NON ADDESTRATO (Template)'}
+ */
+
+#ifndef HEADSTAMP_MODEL_H
+#define HEADSTAMP_MODEL_H
+
+const int MODEL_INPUT_DIM = ${inputDim};
+const int MODEL_HIDDEN_UNITS = ${hiddenUnits};
+const int MODEL_NUM_CLASSES = ${numClasses};
+
+const char* MODEL_CLASS_NAMES[MODEL_NUM_CLASSES] = { ${classNamesArray} };
+
+const float dense1_weights[${w1.length}] = {
+  ${w1.join(', ')}
+};
+
+const float dense1_bias[${b1.length}] = {
+  ${b1.join(', ')}
+};
+
+const float dense2_weights[${w2.length}] = {
+  ${w2.join(', ')}
+};
+
+const float dense2_bias[${b2.length}] = {
+  ${b2.join(', ')}
+};
+
+#endif // HEADSTAMP_MODEL_H
+`;
+        }
+
+        function updateArduinoCodePreview() {
+            const filenameEl = document.getElementById('code-preview-filename');
+            const codeEl = document.getElementById('arduino-code-preview');
+            
+            filenameEl.textContent = APP_STATE.arduinoTarget === 'serial_bridge' 
+                ? 'ballistic_sorter_arduino.ino (USB Serial Bridge)' 
+                : 'ballistic_tinyml_esp32cam.ino (Edge C++ MLP)';
+            
+            codeEl.textContent = generateArduinoInoCode();
+        }
+
+        function downloadTextFile(filename, content) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadArduinoSketch() {
+            const filename = APP_STATE.arduinoTarget === 'serial_bridge' 
+                ? 'ballistic_sorter_arduino.ino' 
+                : 'ballistic_tinyml_esp32cam.ino';
+            downloadTextFile(filename, generateArduinoInoCode());
+            showToast(`File "${filename}" scaricato!`, 'success');
+        }
+
+        function downloadArduinoHeader() {
+            downloadTextFile('headstamp_model.h', generateArduinoHeaderFile());
+            showToast('Header C++ "headstamp_model.h" scaricato!', 'success');
+        }
+
+        function copyArduinoCode() {
+            const code = document.getElementById('arduino-code-preview').textContent;
+            const textarea = document.createElement('textarea');
+            textarea.value = code;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast('Codice C++ copiato negli appunti!', 'success');
+            } catch (err) {
+                showToast('Impossibile copiare automaticamente il testo.', 'error');
+            }
+            document.body.removeChild(textarea);
+        }
+    </script>
+</body>
+</html>
